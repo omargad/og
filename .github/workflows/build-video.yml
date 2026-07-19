@@ -1,0 +1,67 @@
+name: Build actual-footage documentary
+
+on:
+  push:
+    branches: [video-build-temp]
+    paths:
+      - .github/workflows/build-video.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: video-build-temp
+
+      - name: Install media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak
+
+      - name: Download licensed moving footage
+        run: |
+          mkdir -p assets
+          curl -L --fail --retry 4 -o assets/sydney.webm "https://upload.wikimedia.org/wikipedia/commons/a/a8/Time-Lapse_Video_of_Sydney_Harbour_and_Sydney_Harbour_Bridge_on_a_wet_and_rainy_day.webm"
+          curl -L --fail --retry 4 -o assets/cairo.webm "https://upload.wikimedia.org/wikipedia/commons/2/27/Cairo_Wakes_Up.webm"
+          curl -L --fail --retry 4 -o assets/vendors.webm "https://upload.wikimedia.org/wikipedia/commons/4/49/Street_Vendors_of_Cairo.webm"
+          curl -L --fail --retry 4 -o assets/aftermath.webm "https://upload.wikimedia.org/wikipedia/commons/6/6a/Before_Friday_of_Rage_in_Egypt_%282013-08-16%29.webm"
+          curl -L --fail --retry 4 -o assets/candle.webm "https://upload.wikimedia.org/wikipedia/commons/1/17/White_candle_video.webm"
+
+      - name: Render documentary
+        run: python3 build_video.py
+
+      - name: Reconstruct MP4 for delivery
+        run: |
+          python3 - <<'PY'
+          import base64, json
+          from pathlib import Path
+          out = Path('output')
+          manifest = json.loads((out / 'manifest.json').read_text())
+          encoded = ''.join((out / f'chunk_{i:03d}.txt').read_text() for i in range(manifest['chunks']))
+          video = out / manifest['filename']
+          video.write_bytes(base64.b64decode(encoded))
+          print(video, video.stat().st_size)
+          PY
+
+      - name: Upload finished video
+        uses: actions/upload-artifact@v4
+        with:
+          name: actual-footage-documentary
+          path: |
+            output/The_Square_I_Cant_Forget_ACTUAL_VIDEO.mp4
+            output/CREDITS.txt
+          retention-days: 1
+
+      - name: Commit transport manifest
+        run: |
+          rm -f output/The_Square_I_Cant_Forget_ACTUAL_VIDEO.mp4
+          git config user.name "video-build-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add output
+          git commit -m "Temporary rendered video manifest"
+          git push origin video-build-temp
